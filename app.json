@@ -1,0 +1,49 @@
+{
+  "$schema": "./schema/app.v1.json",
+  "id": "dropbox-sync",
+  "name": "Dropbox Sync",
+  "version": "0.1.0",
+  "type": "platform",
+  "description": "Sync selected Dropbox folders into the Cortex knowledge graph — on demand or on a schedule, fully server-side with OAuth PKCE",
+  "publisher": {
+    "name": "reneil",
+    "url": "https://github.com/mocaOS"
+  },
+  "icon": "icon.svg",
+  "entry": "index.html",
+  "cortex": {
+    "minVersion": "2.1.0",
+    "keyScope": "read_write",
+    "endpoints": [
+      "upload",
+      "documents",
+      "collections"
+    ],
+    "collections": "all"
+  },
+  "config": [
+    {
+      "name": "DROPBOX_APP_KEY",
+      "type": "text",
+      "required": true,
+      "description": "App key of a Dropbox scoped app (https://www.dropbox.com/developers/apps). Needs scopes files.metadata.read + files.content.read + account_info.read; PKCE flow, so no app secret is ever required."
+    }
+  ],
+  "externalHosts": [
+    "https://api.dropboxapi.com"
+  ],
+  "sharing": {
+    "links": false
+  },
+  "users": false,
+  "capabilities": {
+    "http": {
+      "hosts": [
+        "api.dropboxapi.com",
+        "content.dropboxapi.com"
+      ]
+    },
+    "tasks": {},
+    "storage": {}
+  }
+}
