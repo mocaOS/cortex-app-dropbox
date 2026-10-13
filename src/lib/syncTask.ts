@@ -12,10 +12,12 @@
  *   items    all listings concatenated (`fromEach`), deduped against storage
  *            keys synced/{id}:{rev} — the rev IS the change marker
  *   steps    skip folders/deleted/non-downloadable entries, optional
- *            extension filter, size cap → if the file changed, delete its
- *            previous Cortex document → binary passthrough upload (Cortex
+ *            extension filter, size cap → binary passthrough upload (Cortex
  *            POSTs content.dropboxapi.com/2/files/download server-side and
- *            streams the bytes into /api/upload) → record docmap + marker
+ *            streams the bytes into /api/upload) that REPLACES the file's
+ *            existing Cortex document in place (source_key +
+ *            replace_document_id from docmap — same document id, only the
+ *            changed parts are re-extracted) → record docmap + marker
  *   finally  persist each folder's new cursor — only when nothing failed,
  *            so failed files are re-listed and retried by the next run
  *
@@ -80,12 +82,33 @@ function folderKey(path: string): string {
   return slug || "root";
 }
 
+/** Old backends (no in-place replace) answer an upload without a "replaced"
+ * field and mint a new document — then remove the superseded one, exactly
+ * like the pre-replace delete-then-upload flow did. */
+const REPLACE_FALLBACK_STEPS = [
+  {
+    cortex: { method: "DELETE", path: "documents/{prev.value.docId}" },
+    when: {
+      and: [
+        { notEmpty: "$prev.value.docId" },
+        { eq: ["{up.body.replaced}", ""] },
+        { neq: ["{up.body.document_id}", "{prev.value.docId}"] },
+      ],
+    },
+  },
+];
+
 export function buildSyncTask(opts: SyncTaskOptions): Record<string, unknown> {
   const uploadParams = new URLSearchParams({
     start_processing: "true",
     source: "dropbox-sync",
   });
   if (opts.collectionId) uploadParams.set("collection_id", opts.collectionId);
+  // Dropbox file ids ("id:…") are stable across renames and moves
+  const uploadPath =
+    `upload?${uploadParams.toString()}` +
+    `&source_key=dropbox%3A{vars.id|urlencode}` +
+    `&replace_document_id={prev.value.docId|urlencode}`;
 
   const auth = { bearer: "$tok.body.access_token" };
   const setup: Array<Record<string, unknown>> = [
@@ -200,23 +223,16 @@ export function buildSyncTask(opts: SyncTaskOptions): Record<string, unknown> {
       },
       // previous sync state for this file (edit tracking by Dropbox file id)
       { id: "prev", store: { get: "docmap/{vars.id}" } },
-      // the file changed → replace, don't duplicate: delete the old document
-      {
-        cortex: { method: "DELETE", path: "documents/{prev.value.docId}" },
-        when: {
-          and: [
-            { found: "$prev.value" },
-            { notEmpty: "$prev.value.docId" },
-            { neq: ["$prev.value.rev", "{vars.rev}"] },
-          ],
-        },
-      },
-      // binary passthrough: server-side Dropbox download → Cortex upload
+      // binary passthrough: server-side Dropbox download → Cortex upload. A
+      // changed file REPLACES its document in place (same id — Cortex
+      // re-extracts only what changed): source_key finds it,
+      // replace_document_id adopts documents synced before source keys
+      // existed. Empty when new.
       {
         id: "up",
         cortex: {
           method: "POST",
-          path: `upload?${uploadParams.toString()}`,
+          path: uploadPath,
           multipart: {
             fromUrl: "https://content.dropboxapi.com/2/files/download",
             method: "POST",
@@ -226,6 +242,10 @@ export function buildSyncTask(opts: SyncTaskOptions): Record<string, unknown> {
           },
         },
       },
+      // compatibility: a Cortex backend without in-place replace ignores the
+      // replace params and creates a new document (its response has no
+      // "replaced" field) — delete the previous one as older app versions did
+      ...REPLACE_FALLBACK_STEPS,
       {
         store: {
           put: "docmap/{vars.id}",

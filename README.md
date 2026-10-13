@@ -56,10 +56,15 @@ executes in its own async loop:
   concatenated and deduped against app storage (`synced/{id}:{rev}`).
   Folder/deleted entries, non-downloadable files (Paper docs), non-document
   extensions (optional) and files over ~19 MB are skipped with visible
-  reasons. Changed files first delete their previous Cortex document
-  (`docmap/{id}` remembers it), then a **binary passthrough upload**:
-  Cortex POSTs `content.dropboxapi.com/2/files/download` server-side and
-  streams the bytes straight into `POST /api/upload` (`source=dropbox-sync`).
+  reasons. Then a **binary passthrough upload**: Cortex POSTs
+  `content.dropboxapi.com/2/files/download` server-side and streams the
+  bytes straight into `POST /api/upload` (`source=dropbox-sync`).
+  Edited files **replace their Cortex document in place**: the upload
+  carries a stable `source_key` plus the previous document id
+  (`docmap/{id}`), so the document keeps its id and Cortex re-extracts
+  only the parts that changed. On a Cortex backend without in-place
+  replace, the app falls back to the old behaviour (new document, then
+  the previous one is deleted).
 - **finally** — persists each folder's new cursor, only when nothing
   failed, so failed files are re-listed and retried by the next run.
   Large first-time backlogs drain across runs (~200 entries per folder per
@@ -89,7 +94,8 @@ retry-failed, and per-file errors. Runs survive Cortex restarts.
 
 ## Manifest notes
 
-- `keyScope: read_write` — uploads and replace-on-change deletes need MANAGE
+- `keyScope: read_write` — uploads (and the old-backend replace fallback's
+  deletes) need MANAGE
 - `endpoints: ["upload", "documents", "collections"]` — everything else 403s
 - `capabilities: http` (hosts `api.dropboxapi.com` + `content.dropboxapi.com`
   for the server-side task), `tasks`, `storage`
